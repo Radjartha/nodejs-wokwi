@@ -1,0 +1,18 @@
+# Untuk server Linux. PostgreSQL TIDAK termasuk (pakai database sendiri).
+#   docker compose -f docker-compose.server.yml up -d --build
+#   docker compose -f docker-compose.server.yml run --rm api node db/migrate.js
+services:
+  api:
+    build: .
+    image: siram-tanaman-api
+    container_name: siram-tanaman-api
+    restart: unless-stopped
+    init: true                      # teruskan SIGTERM agar container berhenti bersih
+    env_file: .env                  # DATABASE_URL, MQTT_URL, MQTT_USERNAME, MQTT_PASSWORD, MQTT_TOPIC_PREFIX
+    environment:
+      PORT: 8067
+    ports:
+      - "8067:8067"
+    extra_hosts:
+      # agar DATABASE_URL bisa memakai host.docker.internal untuk PostgreSQL di host yang sama
+      - "host.docker.internal:host-gateway"

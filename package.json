@@ -1,0 +1,22 @@
+{
+  "name": "nodejs-wokwi",
+  "version": "1.0.0",
+  "description": "Backend Sistem Penyiraman Tanaman Otomatis (ESP32/Wokwi + MQTT + PostgreSQL)",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node --env-file=.env src/server.js",
+    "dev": "node --env-file=.env --watch src/server.js",
+    "db:up": "docker compose up -d db",
+    "db:migrate": "node --env-file=.env db/migrate.js",
+    "db:seed": "node --env-file=.env db/seed.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.3.0",
+    "mqtt": "^5.16.1",
+    "pg": "^8.23.1"
+  }
+}

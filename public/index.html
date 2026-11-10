@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Siram Tanaman Dashboard</title>
+  <style>
+    :root { --bg:#f5f7f5; --card:#fff; --text:#1d2a22; --muted:#66756b; --line:#dfe6e1; --accent:#2e8b57; --warn:#c0392b; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#141a16; --card:#1d2520; --text:#e6eee8; --muted:#94a39a; --line:#2c3730; --accent:#5cc28a; --warn:#ff6b5e; } }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:var(--text); }
+    header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; padding:16px; border-bottom:1px solid var(--line); }
+    h1 { font-size:18px; margin:0; }
+    a { color:var(--accent); }
+    main { max-width:1100px; margin:0 auto; padding:16px; display:grid; gap:16px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+    .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+    .tile .label { color:var(--muted); font-size:13px; }
+    .tile .value { font-size:26px; font-weight:600; margin-top:4px; font-variant-numeric:tabular-nums; }
+    .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    select, button { font:inherit; padding:6px 10px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--text); }
+    button { cursor:pointer; }
+    button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+    .pill { font-size:12px; padding:2px 8px; border-radius:99px; border:1px solid var(--line); }
+    .on { color:var(--accent); } .off { color:var(--muted); } .bad { color:var(--warn); }
+    table { width:100%; border-collapse:collapse; font-size:14px; font-variant-numeric:tabular-nums; }
+    th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+    .scroll { overflow-x:auto; }
+    #msg { min-height:1.2em; font-size:14px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Sistem Penyiraman Tanaman</h1>
+    <div class="row">
+      <span id="online" class="pill">ESP32: ...</span>
+      <span id="mqtt" class="pill">MQTT: ...</span>
+      <select id="device" aria-label="Pilih perangkat"></select>
+      <a href="/docs">API Docs</a>
+    </div>
+  </header>
+  <main>
+    <section class="tiles">
+      <div class="card tile"><div class="label">Kelembaban tanah</div><div class="value" id="t-soil">-</div></div>
+      <div class="card tile"><div class="label">Suhu</div><div class="value" id="t-temp">-</div></div>
+      <div class="card tile"><div class="label">Kelembaban udara</div><div class="value" id="t-hum">-</div></div>
+      <div class="card tile"><div class="label">Pompa</div><div class="value" id="t-pump">-</div></div>
+      <div class="card tile"><div class="label">Mode</div><div class="value" id="t-mode">-</div></div>
+    </section>
+
+    <section class="card">
+      <div class="row" style="justify-content:space-between">
+        <strong>Kontrol mode (via MQTT)</strong>
+        <div class="row">
+          <button class="primary" data-cmd="MODE_AUTO">AUTO</button>
+          <button data-cmd="MODE_MANUAL">MANUAL (30 dtk)</button>
+        </div>
+      </div>
+      <div id="msg" role="status"></div>
+      <div class="muted" style="color:var(--muted);font-size:13px" id="last-seen"></div>
+    </section>
+
+    <section class="card">
+      <strong>24 jam terakhir</strong> <span id="stats" style="color:var(--muted);font-size:13px"></span>
+      <div style="position:relative;height:280px;margin-top:8px"><canvas id="chart"></canvas></div>
+    </section>
+
+    <section class="card scroll">
+      <strong>Data terbaru</strong>
+      <table>
+        <thead><tr><th>Waktu</th><th>Tanah %</th><th>Suhu °C</th><th>Udara %</th><th>Pompa</th><th>Mode</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const api = async (path, opts) => {
+      const r = await fetch('/api' + path, opts);
+      const j = await r.json();
+      if (!j.success) throw new Error(j.error.message);
+      return j;
+    };
+    const fmt = (v, unit = '') => (v === null || v === undefined ? '-' : v + unit);
+    const time = (s) => new Date(s).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'medium' });
+    let chart;
+
+    async function loadDevices() {
+      const { data } = await api('/devices');
+      $('device').replaceChildren(...data.map((d) => new Option(`${d.name} (${d.id})`, d.id)));
+      $('device').hidden = data.length < 2;   // 1 perangkat -> pilihan tidak perlu
+    }
+
+    // ESP32 kirim data tiap 2 detik; > 10 detik tanpa data = offline
+    let lastSeen = 0;
+    const isOnline = () => Date.now() - lastSeen < 10000;
+    function renderOnline() {
+      $('online').textContent = `ESP32: ${isOnline() ? 'online' : 'offline'}`;
+      $('online').className = 'pill ' + (isOnline() ? 'on' : 'bad');
+    }
+
+    // Realtime: server push tiap data baru (SSE), lalu muat ulang tampilan
+    let stream, pending;
+    function listen() {
+      stream?.close();
+      stream = new EventSource(`/api/devices/${$('device').value}/stream`);
+      stream.onmessage = () => { clearTimeout(pending); pending = setTimeout(safeRefresh, 300); };
+    }
+
+    async function refresh() {
+      const id = $('device').value;
+      if (!id) return;
+      const [health, latest, list, stats] = await Promise.all([
+        api('/health'), api(`/devices/${id}/readings/latest`), api(`/devices/${id}/readings?limit=144`), api(`/devices/${id}/stats?hours=24`),
+      ]);
+      const m = health.data.mqtt;
+      $('mqtt').textContent = `MQTT: ${m.connected ? 'terhubung' : 'terputus'}`;
+      $('mqtt').className = 'pill ' + (m.connected ? 'on' : 'bad');
+
+      const r = latest.data;
+      $('t-soil').textContent = fmt(r?.soil_moisture, '%');
+      $('t-temp').textContent = r?.temperature == null ? 'error' : r.temperature.toFixed(1) + '°C';
+      $('t-temp').className = 'value' + (r?.temperature > 35 ? ' bad' : '');
+      $('t-hum').textContent = r?.air_humidity == null ? '-' : Math.round(r.air_humidity) + '%';
+      $('t-pump').textContent = r ? (r.pump_on ? 'ON' : 'OFF') : '-';
+      $('t-pump').className = 'value ' + (r?.pump_on ? 'on' : 'off');
+      $('t-mode').textContent = fmt(r?.mode);
+      $('last-seen').textContent = r ? 'Data terakhir: ' + time(r.created_at) : 'Belum ada data';
+      lastSeen = r ? new Date(r.created_at).getTime() : 0;
+      renderOnline();
+
+      const s = stats.data;
+      $('stats').textContent = s.count ? `· rata-rata tanah ${s.soil_avg}%, suhu ${s.temp_avg}°C, pompa ON ${s.pump_on_percent}% waktu` : '';
+
+      $('rows').innerHTML = list.data.slice(0, 15).map((x) => `<tr><td>${time(x.created_at)}</td><td>${x.soil_moisture}</td><td>${fmt(x.temperature)}</td><td>${fmt(x.air_humidity)}</td><td class="${x.pump_on ? 'on' : 'off'}">${x.pump_on ? 'ON' : 'OFF'}</td><td>${x.mode}</td></tr>`).join('');
+
+      const pts = [...list.data].reverse();
+      const css = getComputedStyle(document.documentElement);
+      const cfg = {
+        labels: pts.map((x) => new Date(x.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })),
+        datasets: [
+          { label: 'Tanah %', data: pts.map((x) => x.soil_moisture), borderColor: '#2e8b57', yAxisID: 'y', pointRadius: 0, tension: 0.3 },
+          { label: 'Suhu °C', data: pts.map((x) => x.temperature), borderColor: '#e07b39', yAxisID: 'y1', pointRadius: 0, tension: 0.3 },
+        ],
+      };
+      if (!chart) {
+        Chart.defaults.color = css.getPropertyValue('--muted');
+        chart = new Chart($('chart'), {
+          type: 'line', data: cfg,
+          options: { maintainAspectRatio: false, animation: false, interaction: { mode: 'index', intersect: false },
+            scales: { y: { min: 0, max: 100, title: { display: true, text: '%' } }, y1: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: '°C' } } } },
+        });
+      } else { chart.data = cfg; chart.update(); }
+    }
+
+    document.querySelectorAll('[data-cmd]').forEach((b) => b.addEventListener('click', async () => {
+      try {
+        await api(`/devices/${$('device').value}/commands`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: b.dataset.cmd }) });
+        $('msg').textContent = isOnline()
+          ? `Perintah ${b.dataset.cmd} terkirim. Mode berubah di data berikutnya.`
+          : `Perintah ${b.dataset.cmd} terkirim ke broker, tapi ESP32 offline sehingga tidak akan diterima.`;
+        $('msg').className = isOnline() ? 'on' : 'bad';
+      } catch (e) { $('msg').textContent = e.message; $('msg').className = 'bad'; }
+    }));
+
+    const safeRefresh = () => refresh().catch((e) => { $('msg').textContent = 'Gagal memuat: ' + e.message; $('msg').className = 'bad'; });
+    $('device').addEventListener('change', () => { listen(); safeRefresh(); });
+    loadDevices().then(() => { listen(); safeRefresh(); });
+    setInterval(renderOnline, 2000);
+    setInterval(safeRefresh, 30000);   // cadangan bila SSE terputus
+  </script>
+</body>
+</html>

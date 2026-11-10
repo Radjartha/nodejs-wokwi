@@ -1,0 +1,4 @@
+LiquidCrystal I2C
+ESP32Servo
+DHT sensor library for ESPx
+PubSubClient

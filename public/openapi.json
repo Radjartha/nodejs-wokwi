@@ -1,0 +1,726 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Siram Tanaman API",
+    "version": "1.0.0",
+    "description": "REST API Sistem Penyiraman Tanaman Otomatis (ESP32 Wokwi).\n\n**Alur data:** ESP32 publish data sensor ke MQTT `<prefix>/<device_id>/telemetry` → backend subscribe & simpan ke PostgreSQL → front-end baca lewat API ini. Perintah dari front-end (`POST /devices/{id}/commands`) dikirim backend ke MQTT `<prefix>/<device_id>/cmd`.\n\n**Format respons:** sukses `{ success: true, data, meta? }`, gagal `{ success: false, error: { code, message } }`. Gunakan `error.code` di front-end (stabil): VALIDATION_ERROR, INVALID_JSON, NOT_FOUND, CONFLICT, MQTT_UNAVAILABLE, INTERNAL_ERROR.."
+  },
+  "servers": [
+    {
+      "url": "/api"
+    }
+  ],
+  "tags": [
+    {
+      "name": "System"
+    },
+    {
+      "name": "Devices"
+    },
+    {
+      "name": "Readings",
+      "description": "Data sensor"
+    },
+    {
+      "name": "Commands",
+      "description": "Perintah ke ESP32 via MQTT"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Cek status server, database, dan koneksi MQTT",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "data": {
+                    "status": "ok",
+                    "database": "ok",
+                    "mqtt": {
+                      "connected": true,
+                      "broker": "mqtts://xxxxxxxx.ala.asia-southeast1.emqxsl.com:8883",
+                      "topic_prefix": "siram-tanaman"
+                    },
+                    "time": "2026-11-10T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/devices": {
+      "get": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Daftar perangkat + data sensor terakhir",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DeviceWithLatest"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Daftarkan perangkat baru",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Dibuat",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Device"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/devices/{id}": {
+      "get": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Detail perangkat + status online + data sensor terakhir",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DeviceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/devices/{id}/readings": {
+      "get": {
+        "tags": [
+          "Readings"
+        ],
+        "summary": "Riwayat data sensor (terbaru dulu, berhalaman)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DeviceId"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 1000
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Reading"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "type": "integer"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Readings"
+        ],
+        "summary": "Kirim data sensor lewat HTTP (untuk uji tanpa ESP32; jalur utama lewat MQTT)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DeviceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadingInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Tersimpan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadingResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/devices/{id}/readings/latest": {
+      "get": {
+        "tags": [
+          "Readings"
+        ],
+        "summary": "Data sensor terakhir (data = null jika belum ada)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DeviceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadingResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/devices/{id}/stats": {
+      "get": {
+        "tags": [
+          "Readings"
+        ],
+        "summary": "Statistik N jam terakhir (rata-rata, min, max, % waktu pompa ON)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DeviceId"
+          },
+          {
+            "name": "hours",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 24,
+              "minimum": 1,
+              "maximum": 720
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "data": {
+                    "hours": 24,
+                    "count": 145,
+                    "soil_avg": 44.2,
+                    "soil_min": 29,
+                    "soil_max": 61,
+                    "temp_avg": 27.5,
+                    "temp_min": 19.1,
+                    "temp_max": 35.8,
+                    "humidity_avg": 75.6,
+                    "pump_on_percent": 18.6
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/devices/{id}/commands": {
+      "get": {
+        "tags": [
+          "Commands"
+        ],
+        "summary": "Riwayat perintah",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DeviceId"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Command"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Commands"
+        ],
+        "summary": "Ubah mode ESP32 (publish ke MQTT <prefix>/<id>/cmd)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DeviceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "command"
+                ],
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "enum": [
+                      "MODE_AUTO",
+                      "MODE_MANUAL"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Terkirim ke broker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Command"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/devices/{id}/stream": {
+      "get": {
+        "tags": [
+          "Readings"
+        ],
+        "summary": "Realtime data sensor (Server-Sent Events)",
+        "description": "Koneksi tetap terbuka; tiap data baru dari ESP32 dikirim sebagai event `data: <Reading JSON>`.\n\n```js\nconst es = new EventSource('/api/devices/esp32-01/stream');\nes.onmessage = (e) => console.log(JSON.parse(e.data));\n```",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DeviceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stream text/event-stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "example": "data: {\"id\":\"300\",\"device_id\":\"esp32-01\",\"soil_moisture\":42,\"temperature\":30.5,\"air_humidity\":65,\"pump_on\":false,\"mode\":\"AUTO\",\"created_at\":\"2026-11-10T08:00:00.000Z\"}"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "DeviceId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "example": "esp32-01"
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Gagal",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": false
+                },
+                "error": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "VALIDATION_ERROR",
+                        "INVALID_JSON",
+                        "NOT_FOUND",
+                        "CONFLICT",
+                        "MQTT_UNAVAILABLE",
+                        "INTERNAL_ERROR"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "DeviceInput": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "esp32-03",
+            "pattern": "^[\\w-]{1,50}$"
+          },
+          "name": {
+            "type": "string",
+            "example": "Taman Samping"
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "Device": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DeviceResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/DeviceWithLatest"
+          }
+        }
+      },
+      "DeviceWithLatest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Device"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "online": {
+                "type": "boolean",
+                "description": "true jika ada data dalam 10 detik terakhir"
+              },
+              "last_seen": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "latest": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Reading"
+                  }
+                ],
+                "nullable": true,
+                "description": "Data sensor terakhir, null jika belum ada"
+              }
+            }
+          }
+        ]
+      },
+      "ReadingInput": {
+        "type": "object",
+        "required": [
+          "soil_moisture",
+          "pump_on",
+          "mode"
+        ],
+        "description": "Sama dengan payload MQTT <prefix>/<id>/telemetry",
+        "properties": {
+          "soil_moisture": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "example": 42
+          },
+          "temperature": {
+            "type": "number",
+            "nullable": true,
+            "example": 30.5,
+            "description": "null jika DHT22 error"
+          },
+          "air_humidity": {
+            "type": "number",
+            "nullable": true,
+            "example": 65
+          },
+          "pump_on": {
+            "type": "boolean",
+            "example": false
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "AUTO",
+              "MANUAL"
+            ]
+          }
+        }
+      },
+      "Reading": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ReadingInput"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer"
+              },
+              "device_id": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        ]
+      },
+      "ReadingResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/Reading"
+          }
+        }
+      },
+      "Command": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "device_id": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string",
+            "enum": [
+              "MODE_AUTO",
+              "MODE_MANUAL"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}
