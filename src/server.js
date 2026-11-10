@@ -4,14 +4,18 @@ const router = require('./routes');
 
 const app = express();
 
-// CORS terbuka agar front-end (domain/port lain) bisa memanggil API.
-// shortcut: izinkan semua origin; batasi ke domain front-end saat produksi.
+// CORS: hanya origin di CORS_ORIGINS (dipisah koma) yang boleh memanggil API dari browser.
+// Dashboard di server ini sendiri (same-origin) tidak butuh CORS.
+const allowedOrigins = (process.env.CORS_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean);
 app.use((req, res, next) => {
-  res.set({
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  });
+  if (allowedOrigins.includes(req.headers.origin)) {
+    res.set({
+      'Access-Control-Allow-Origin': req.headers.origin,
+      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    });
+  }
+  res.vary('Origin');   // cache/proxy tidak boleh berbagi respons antar origin
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });

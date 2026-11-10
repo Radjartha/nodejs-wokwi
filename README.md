@@ -140,7 +140,7 @@ const res = await fetch('http://localhost:3000/api/devices/esp32-01/readings/lat
 const { success, data, error } = await res.json();
 ```
 
-CORS terbuka untuk semua origin. Batasi di `src/server.js` sebelum produksi.
+CORS: hanya origin di `CORS_ORIGINS` (`.env`, dipisah koma, mis. `https://app.contoh.com,http://localhost:5173`) yang boleh memanggil API dari browser. Ubah `.env` lalu restart container.
 
 ## Struktur
 
